@@ -9,39 +9,30 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { ResultsDisplay } from './results-display';
 
-const loadingMessages = [
-  "Analyzing goal specificity...",
-  "Measuring goal metrics...",
-  "Checking achievability...",
-  "Evaluating relevance...",
-  "Verifying time constraints...",
-  "Calculating SMART scores...",
-];
+interface StreamMessage {
+  type: 'status' | 'error' | 'partial' | 'complete';
+  message?: string;
+  data?: {
+    goals?: Goal[];
+    employees?: Employee[];
+  };
+}
 
 export function FileUpload() {
   const [isLoading, setIsLoading] = useState(false);
-  const [results, setResults] = useState(null);
-  const [loadingMessage, setLoadingMessage] = useState(loadingMessages[0]);
+  const [results, setResults] = useState<null | {
+    goals: Goal[];
+    employees: Employee[];
+    isComplete: boolean;
+  }>(null);
+  const [loadingMessage, setLoadingMessage] = useState<string>('Starting analysis...');
   const [error, setError] = useState<string | null>(null);
-
-  // Loading message animation
-  useEffect(() => {
-    if (!isLoading) return;
-
-    let currentIndex = 0;
-    const interval = setInterval(() => {
-      currentIndex = (currentIndex + 1) % loadingMessages.length;
-      setLoadingMessage(loadingMessages[currentIndex]);
-    }, 2000); // Change message every 2 seconds
-
-    return () => clearInterval(interval);
-  }, [isLoading]);
 
   const onDrop = async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
 
     const file = acceptedFiles[0];
-    setError(null); // Clear any previous errors
+    setError(null);
 
     // Validate file extension
     if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
@@ -50,6 +41,7 @@ export function FileUpload() {
     }
 
     setIsLoading(true);
+    setResults(null);
     const formData = new FormData();
     formData.append('file', file);
 
@@ -59,22 +51,67 @@ export function FileUpload() {
         body: formData,
       });
 
-      const data = await response.json();
-      console.log('Response:', response.status, data);
-
-      if (!response.ok) {
-        setError(data.message || 'Failed to analyze file');
-        setResults(null);
-        return;
+      if (!response.body) {
+        throw new Error('No response stream available');
       }
 
-      setResults(data);
-      setError(null);
-      toast.success('File analyzed successfully!');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
+      let goals: Goal[] = [];
+      let employees: Employee[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(Boolean);
+
+        for (const line of lines) {
+          try {
+            const message = JSON.parse(line) as StreamMessage;
+
+            switch (message.type) {
+              case 'status':
+                if (message.message) {
+                  setLoadingMessage(message.message);
+                }
+                break;
+
+              case 'error':
+                throw new Error(message.message);
+
+              case 'partial':
+                if (message.data?.goals) {
+                  goals = [...goals, ...message.data.goals];
+                  setResults(prev => ({
+                    goals,
+                    employees: prev?.employees || [],
+                    isComplete: false
+                  }));
+                }
+                break;
+
+              case 'complete':
+                if (message.data) {
+                  setResults({
+                    goals: message.data.goals || [],
+                    employees: message.data.employees || [],
+                    isComplete: true
+                  });
+                  toast.success('Analysis complete!');
+                }
+                break;
+            }
+          } catch (parseError) {
+            console.error('Error parsing stream:', parseError);
+          }
+        }
+      }
     } catch (error) {
       console.error('Error:', error);
-      setError('Network error. Please check your connection and try again.');
+      setError(error instanceof Error ? error.message : 'An error occurred during analysis');
       setResults(null);
     } finally {
       setIsLoading(false);
@@ -168,7 +205,12 @@ export function FileUpload() {
         </div>
       </Card>
 
-      {results && <ResultsDisplay results={results} />}
+      {results && (
+        <ResultsDisplay
+          results={results}
+          showEmployees={results.isComplete}
+        />
+      )}
     </div>
   );
 }

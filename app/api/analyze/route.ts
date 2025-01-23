@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import * as XLSX from 'xlsx';
 import OpenAI from 'openai';
 
@@ -39,70 +39,88 @@ interface AnalysisResponse {
 }
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const BATCH_SIZE = 5; // Process 5 goals at a time
-const MAX_GOALS = 50; // Maximum number of goals allowed
+const BATCH_SIZE = 5;
+const MAX_GOALS = 50;
+
+const loadingMessages = [
+  "Analyzing goal specificity",
+  "Measuring goal metrics",
+  "Checking achievability",
+  "Evaluating relevance",
+  "Verifying time constraints",
+  "Calculating SMART scores"
+];
 
 export async function POST(request: NextRequest) {
-  try {
-    // Check API Key
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({
-        error: 'Configuration Error',
-        message: 'OpenAI API key is not configured'
-      }, { status: 500 });
-    }
+  const encoder = new TextEncoder();
+  const stream = new TransformStream();
+  const writer = stream.writable.getWriter();
 
-    // Parse form data
-    const formData = await request.formData();
-    const file = formData.get('file');
+  const sendMessage = async (message: any) => {
+    await writer.write(encoder.encode(JSON.stringify(message) + '\n'));
+  };
 
-    // Type check for File
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({
-        error: 'Invalid File',
-        message: 'No file provided or invalid file type'
-      }, { status: 400 });
-    }
-
-    // Read and parse the Excel file
+  const processData = async () => {
     try {
+      // Check API Key
+      if (!process.env.OPENAI_API_KEY) {
+        await sendMessage({
+          type: 'error',
+          message: 'OpenAI API key is not configured'
+        });
+        return;
+      }
+
+      // Parse form data
+      const formData = await request.formData();
+      const file = formData.get('file');
+
+      if (!file || !(file instanceof File)) {
+        await sendMessage({
+          type: 'error',
+          message: 'No file provided or invalid file type'
+        });
+        return;
+      }
+
+      // Read and parse Excel
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(worksheet);
 
-      // Log data for debugging
-      console.log('Parsed data:', data);
-
       if (!data || !Array.isArray(data) || data.length === 0) {
-        return NextResponse.json({
-          error: 'Empty File',
+        await sendMessage({
+          type: 'error',
           message: 'The Excel file is empty or contains no valid data.'
-        }, { status: 400 });
+        });
+        return;
       }
 
-      // Check goals limit
-      if (data.length > MAX_GOALS) {
-        return NextResponse.json({
-          error: 'File Too Large',
-          message: `Please limit the file to ${MAX_GOALS} goals maximum. Split larger files into multiple uploads.`
-        }, { status: 400 });
-      }
-
-      // Log the data structure to help with debugging
-      console.log('Excel data structure:', Object.keys(data[0] || {}));
-
-      // Process data in batches
+      // Process in batches
       const batches = [];
       for (let i = 0; i < data.length; i += BATCH_SIZE) {
         batches.push(data.slice(i, i + BATCH_SIZE));
       }
 
+      await sendMessage({
+        type: 'status',
+        message: `Starting analysis of ${data.length} goals in ${batches.length} batches...`
+      });
+
       let allGoals: Goal[] = [];
       let employeeStats = new Map<string, Employee>();
 
       // Process each batch
-      for (const batch of batches) {
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        const batchNumber = i + 1;
+
+        await sendMessage({
+          type: 'status',
+          message: `Analyzing batch ${batchNumber} of ${batches.length}: ${loadingMessages[i % loadingMessages.length]}`
+        });
+
         const prompt = `You are a JSON-generating API that analyzes employee goals based on SMART criteria.
 
 Analyze these employee goals and return ONLY a JSON object with this exact structure:
@@ -148,38 +166,36 @@ ${JSON.stringify(batch, null, 2)}`;
           max_tokens: 1000,
         });
 
-        try {
-          const analysis = JSON.parse(completion.choices[0].message.content || '{}') as AnalysisResponse;
+        const analysis = JSON.parse(completion.choices[0].message.content || '{}') as AnalysisResponse;
 
-          // Validate and merge batch results
-          if (analysis.goals && Array.isArray(analysis.goals)) {
-            allGoals = [...allGoals, ...analysis.goals];
-          }
+        if (analysis.goals) {
+          allGoals = [...allGoals, ...analysis.goals];
+          await sendMessage({
+            type: 'partial',
+            data: { goals: analysis.goals }
+          });
+        }
 
-          if (analysis.employees && Array.isArray(analysis.employees)) {
-            analysis.employees.forEach((emp: AnalysisEmployee) => {
-              if (!employeeStats.has(emp.personId)) {
-                employeeStats.set(emp.personId, {
-                  personId: emp.personId,
-                  employeeDisplayName: emp.employeeDisplayName,
-                  job: emp.job,
-                  totalGoals: 0,
-                  totalScore: 0
-                });
-              }
-              const stats = employeeStats.get(emp.personId)!;
-              stats.totalGoals += emp.totalGoals;
-              stats.totalScore += (emp.averageScore * emp.totalGoals);
-            });
-          }
-        } catch (parseError) {
-          console.error('Batch processing error:', parseError);
-          continue;
+        if (analysis.employees) {
+          analysis.employees.forEach((emp: AnalysisEmployee) => {
+            if (!employeeStats.has(emp.personId)) {
+              employeeStats.set(emp.personId, {
+                personId: emp.personId,
+                employeeDisplayName: emp.employeeDisplayName,
+                job: emp.job,
+                totalGoals: 0,
+                totalScore: 0
+              });
+            }
+            const stats = employeeStats.get(emp.personId)!;
+            stats.totalGoals += emp.totalGoals;
+            stats.totalScore += (emp.averageScore * emp.totalGoals);
+          });
         }
       }
 
-      // Calculate final employee statistics
-      const finalEmployeeStats: EmployeeStats[] = Array.from(employeeStats.values()).map(emp => ({
+      // Calculate final stats
+      const finalEmployeeStats = Array.from(employeeStats.values()).map(emp => ({
         personId: emp.personId,
         employeeDisplayName: emp.employeeDisplayName,
         job: emp.job,
@@ -187,24 +203,35 @@ ${JSON.stringify(batch, null, 2)}`;
         averageScore: Math.round((emp.totalScore / emp.totalGoals) * 10) / 10
       }));
 
-      return NextResponse.json({
-        goals: allGoals,
-        employees: finalEmployeeStats
+      // Send final results
+      await sendMessage({
+        type: 'complete',
+        data: {
+          goals: allGoals,
+          employees: finalEmployeeStats
+        }
       });
 
-    } catch (parseError) {
-      console.error('Excel parsing error:', parseError);
-      return NextResponse.json({
-        error: 'Parse Error',
-        message: 'Failed to parse Excel file. Please check the file format.'
-      }, { status: 400 });
+    } catch (error) {
+      console.error('Error:', error);
+      await sendMessage({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'An unexpected error occurred'
+      });
+    } finally {
+      await writer.close();
     }
+  };
 
-  } catch (error) {
-    console.error("Error details:", error);
-    return NextResponse.json({
-      error: 'Server Error',
-      message: error instanceof Error ? error.message : 'An unexpected error occurred'
-    }, { status: 500 });
-  }
+  // Start processing
+  processData();
+
+  // Return the readable stream
+  return new Response(stream.readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }

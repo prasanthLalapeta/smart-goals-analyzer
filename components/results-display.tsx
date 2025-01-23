@@ -39,7 +39,9 @@ interface ResultsDisplayProps {
   results: {
     goals: Goal[];
     employees: Employee[];
+    isComplete: boolean;
   };
+  showEmployees: boolean;
 }
 
 const getScoreColor = (score: number) => {
@@ -49,7 +51,7 @@ const getScoreColor = (score: number) => {
   return "bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20";
 };
 
-export function ResultsDisplay({ results }: ResultsDisplayProps) {
+export function ResultsDisplay({ results, showEmployees }: ResultsDisplayProps) {
   const [activeTab, setActiveTab] = useState('goals');
 
   const downloadExcel = (data: any[], filename: string) => {
@@ -65,7 +67,9 @@ export function ResultsDisplay({ results }: ResultsDisplayProps) {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="goals">Evaluated Goals</TabsTrigger>
-            <TabsTrigger value="employees">Employee Scores</TabsTrigger>
+            <TabsTrigger value="employees" disabled={!showEmployees}>
+              Employee Scores {!showEmployees && '(Processing...)'}
+            </TabsTrigger>
           </TabsList>
 
           <div className="mt-6">
