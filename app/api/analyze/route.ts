@@ -40,6 +40,7 @@ interface AnalysisResponse {
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BATCH_SIZE = 5; // Process 5 goals at a time
+const MAX_GOALS = 50; // Maximum number of goals allowed
 
 export async function POST(request: NextRequest) {
   try {
@@ -77,6 +78,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           error: 'Empty File',
           message: 'The Excel file is empty or contains no valid data.'
+        }, { status: 400 });
+      }
+
+      // Check goals limit
+      if (data.length > MAX_GOALS) {
+        return NextResponse.json({
+          error: 'File Too Large',
+          message: `Please limit the file to ${MAX_GOALS} goals maximum. Split larger files into multiple uploads.`
         }, { status: 400 });
       }
 
