@@ -1,25 +1,7 @@
 import { NextRequest } from 'next/server';
 import * as XLSX from 'xlsx';
 import OpenAI from 'openai';
-
-interface Goal {
-  personId: string;
-  employeeDisplayName: string;
-  job: string;
-  goalName: string;
-  deliverable: string;
-  targetResult: string;
-  score: number;
-  suggestions: string;
-}
-
-interface Employee {
-  personId: string;
-  employeeDisplayName: string;
-  job: string;
-  totalGoals: number;
-  totalScore: number;
-}
+import { Goal, Employee, EmployeeWithScore } from '@/types';
 
 interface EmployeeStats extends Omit<Employee, 'totalScore'> {
   averageScore: number;
@@ -86,13 +68,60 @@ export async function POST(request: NextRequest) {
       // Read and parse Excel
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+
+      // Validate workbook has sheets
+      if (!workbook.SheetNames.length) {
+        await sendMessage({
+          type: 'error',
+          message: 'The Excel file is empty. Please add data to the file.'
+        });
+        return;
+      }
+
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+      // Validate worksheet has data
+      if (!worksheet['!ref']) {
+        await sendMessage({
+          type: 'error',
+          message: 'The Excel sheet is empty. Please add data to the sheet.'
+        });
+        return;
+      }
+
       const data = XLSX.utils.sheet_to_json(worksheet);
 
+      // Validate data structure
       if (!data || !Array.isArray(data) || data.length === 0) {
         await sendMessage({
           type: 'error',
-          message: 'The Excel file is empty or contains no valid data.'
+          message: 'No valid data found in the Excel file. Please check the file format and try again.'
+        });
+        return;
+      }
+
+      // Validate required columns
+      const requiredColumns = ['employeeDisplayName', 'job', 'goalName', 'deliverable', 'targetResult'];
+      const firstRow = data[0] as Record<string, unknown>;
+
+      if (typeof firstRow !== 'object' || !firstRow) {
+        await sendMessage({
+          type: 'error',
+          message: 'Invalid data format in Excel file. Please check the template format.'
+        });
+        return;
+      }
+
+      const missingColumns = requiredColumns.filter(col =>
+        !Object.keys(firstRow).some(key =>
+          key.toLowerCase().replace(/\s+/g, '') === col.toLowerCase()
+        )
+      );
+
+      if (missingColumns.length > 0) {
+        await sendMessage({
+          type: 'error',
+          message: `Missing required columns: ${missingColumns.join(', ')}. Please check the file format.`
         });
         return;
       }
@@ -109,7 +138,7 @@ export async function POST(request: NextRequest) {
       });
 
       let allGoals: Goal[] = [];
-      let employeeStats = new Map<string, Employee>();
+      let employeeStats = new Map<string, EmployeeWithScore>();
 
       // Process each batch
       for (let i = 0; i < batches.length; i++) {

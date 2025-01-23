@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileSpreadsheet, Loader2, AlertCircle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { ResultsDisplay } from './results-display';
+import { Goal, Employee } from '@/types';
 
 interface StreamMessage {
   type: 'status' | 'error' | 'partial' | 'complete';
@@ -80,7 +81,10 @@ export function FileUpload() {
                 break;
 
               case 'error':
-                throw new Error(message.message);
+                setError(message.message || 'An error occurred during analysis');
+                setResults(null);
+                setIsLoading(false);
+                return;
 
               case 'partial':
                 if (message.data?.goals) {
@@ -106,13 +110,29 @@ export function FileUpload() {
             }
           } catch (parseError) {
             console.error('Error parsing stream:', parseError);
+            toast.error('Error processing some results');
           }
         }
       }
     } catch (error) {
       console.error('Error:', error);
-      setError(error instanceof Error ? error.message : 'An error occurred during analysis');
+      let errorMessage = 'An error occurred during analysis';
+
+      if (error instanceof Error) {
+        if (error.message.includes('empty') || error.message.includes('no valid data')) {
+          errorMessage = 'The Excel file appears to be empty or invalid. Please check the file and try again.';
+        } else if (error.message.includes('Missing required columns')) {
+          errorMessage = error.message;
+        } else if (error.message.includes('network')) {
+          errorMessage = 'Network error. Please check your connection.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+
+      setError(errorMessage);
       setResults(null);
+      toast.error(errorMessage);
     } finally {
       setIsLoading(false);
     }

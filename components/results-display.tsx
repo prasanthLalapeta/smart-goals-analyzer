@@ -14,26 +14,7 @@ import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
-
-interface Goal {
-  name: string;
-  score: number;
-  suggestions: string;
-  personId: string;
-  employeeDisplayName: string;
-  goalName: string;
-  job: string;
-  deliverable: string;
-  targetResult: string;
-}
-
-interface Employee {
-  personId: string;
-  employeeDisplayName: string;
-  job: string;
-  totalGoals: number;
-  averageScore: number;
-}
+import { Goal, Employee } from '@/types';
 
 interface ResultsDisplayProps {
   results: {
